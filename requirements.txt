@@ -3,3 +3,5 @@ pillow==13.0.0
 matplotlib==3.11.2
 streamlit==1.66.1
 pytest==9.2.0
+cryptography>=41.0
+torch>=2.1

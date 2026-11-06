@@ -1,35 +1,36 @@
 # Dynamic Visual Cryptography for Secure Image Transmission
 
-This project splits a secret image into **n** noise-like shares. Any **k** of the shares rebuild the image, and
-**k − 1** or fewer reveal nothing. Every transmission uses fresh randomness. Every share is SHA-256 tagged and
-checked before decoding, and every session is scored and logged so it can be replayed bit for bit.
+The current dashboard implements a seven-stage, prism-inspired flow:
+
+1. **Input image** - decode, normalize, flatten alpha, detect mode, and hash the source.
+2. **Prism-inspired spectral preprocessing** - map RGB into seven simulated bands at 400, 450, 500, 550, 600,
+   650 and 700 nm.
+3. **XOR share split** - Share A is fresh noise; Share B is the source XOR Share A. The threshold is fixed at
+   (2, 2), so both shares are required and either one alone is noise.
+4. **AES-256-GCM** - seal each share with a per-share HKDF-SHA256 key, a 128-bit salt and a 96-bit nonce.
+5. **Secure channel** - transmit the two encrypted packets separately, with optional fault injection and
+   selective retransmission.
+6. **Receiver checks** - verify both GCM tags and classify each share with a small CNN
+   (`genuine`, `noisy`, `tampered`).
+7. **XOR reconstruction** - combine the authenticated shares into the exact image.
+
+The **Session** tab also renders a live seven-stage diagram, the spectral bands, the shares, the channel
+receipts, the reconstruction, the attacker's view (Share A alone), and a scorecard. **History & replay** logs
+sessions to `runs/sessions.jsonl` and can replay a stored session. **Compare sessions** runs a clean channel and
+a tampered packet side by side. **How it works** explains the flow and its scope.
+
+The 400-700 nm bands are **simulated from RGB**. This is a teaching visualization, not a measurement from a
+multispectral sensor. AES-GCM provides confidentiality and integrity; the CNN is a secondary demo check.
 
 ## Requirements
 
-- **Python 3.12 or newer** (the pinned NumPy 2.5 needs 3.12+). Tested on Python 3.12 and 3.14.
-- macOS, Linux, or Windows. No GPU or database needed.
-- Check your version with `python3 --version` (Windows: `python --version`).
+- Python 3.12 or newer.
+- Windows, macOS or Linux. The CNN runs on CPU.
+- Dependencies are in `requirements.txt` (`numpy`, `Pillow`, `cryptography`, `torch`).
 
 ## How to run
 
-### 1. Get the code
-
-```bash
-git clone https://github.com/imtiyazakiwat/dynamic-visual-cryptography.git
-cd dynamic-visual-cryptography
-```
-
-### 2. Create a virtual environment and install the dependencies
-
-macOS / Linux:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
-
-Windows (PowerShell):
+Create a virtual environment and install the dependencies:
 
 ```powershell
 python -m venv .venv
@@ -37,138 +38,77 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-If PowerShell blocks the activate script, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or use
-Command Prompt with `.venv\Scripts\activate.bat`.
+If PowerShell blocks activation, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or use
+`.venv\Scripts\activate.bat` from Command Prompt.
 
-If `python3` on your machine is older than 3.12, name a newer one explicitly, for example `python3.12 -m venv .venv`.
-
-All commands below assume the virtual environment is active (your prompt shows `(.venv)`). Run them from the
-project folder.
-
-### 3. Start the dashboard
+Start the dashboard:
 
 ```bash
 streamlit run app.py
 ```
 
-Open http://localhost:8501 in a browser (Streamlit usually opens it for you). Then:
+Open http://localhost:8501. In the sidebar:
 
-1. In the sidebar, choose a sample image or upload your own (PNG, JPEG, TIFF, BMP, up to 2048 × 2048).
-2. Choose a threshold preset, for example **(2, 3)**: 3 shares are created and any 2 rebuild the image.
-3. Choose **XOR** (exact digital recovery) or **OR** (simulated stacking of printed transparencies).
-4. Optional: open **Transmission faults** and break a channel (drop, flip, crop, replay, ...).
-5. Click **Run session**.
+1. Choose a sample image or upload your own (PNG, JPEG, TIFF or BMP, up to 2048 x 2048).
+2. The threshold is fixed at **(2, 2)** for this flow.
+3. Optional: open **Transmission faults** and inject a problem on either channel
+   (`drop`, `delay`, `flip`, `crop`, `substitute`, `replay`). Choose whether faults also hit retransmissions and
+   set the retry budget.
+4. Under **Advanced**, store the seed for replay, show the spectral bands, and enable the cross-session secrecy
+   test.
+5. Press **Run session**.
 
-The **Session** tab shows the 7 pipeline gates, the shares, channel status, the rebuilt image, what an attacker
-with too few shares sees, and the scorecard. **History & replay** re-runs any logged session bit for bit.
-**Compare sessions** runs several thresholds side by side. Stop the server with `Ctrl+C`.
+`main.py` is an alias entry point: `streamlit run main.py` launches the same app.
 
-### 4. Run the tests
+## Model
 
-```bash
-python -m pytest -q
-```
-
-Expected: `65 passed`.
-
-### 5. Run the benchmark (optional)
+`share_cnn.pt` is a small convolutional classifier for 64 x 64 share crops. If the checkpoint is missing, the app
+creates `data/shares.npz` (400 samples per class) and trains it on first use. To build or retrain it from the
+command line:
 
 ```bash
-python bench.py
+python prism_flow.py
 ```
 
-This scores every image in `samples/` at (2,2), (2,3), (3,3), (3,5) and (4,5) in both modes, runs the fault
-suite, and writes `reports/scorecard.csv`, `reports/fault_suite.csv`, `reports/threshold_curves.png` and
-`reports/summary.md`. Use `python bench.py --trials 1` for a quicker run.
-
-### 6. Command line (optional)
-
-```bash
-# Run one full session and save secret, shares, output and manifest into out/
-python -m dvc.cli run samples/peppers_color.png --k 3 --n 5 --mode xor --out out/
-
-# Visual (OR) mode with a pixel flipped on channel 1
-python -m dvc.cli run samples/secret_text_binary.png --k 2 --n 3 --mode or --fault 1=flip --out out/
-
-# List logged sessions, then replay one by its id
-python -m dvc.cli history
-python -m dvc.cli replay <session_id>
-
-# All options
-python -m dvc.cli run --help
-```
-
-Fault kinds: `drop`, `delay`, `flip`, `crop`, `replay`, `substitute`. A fault hits only the first send by default,
-so a retry repairs it. Add `--persistent` to make faults hit retransmissions too, and `--retries N` to change the
-retry budget (default 1). `run` exits with code 0 on success and 2 if the session aborted.
-
-Sessions are logged to `runs/sessions.jsonl` (created on first run). This folder is ignored by git; see the
-security notes below.
-
-## Pipeline (PDF section 10)
-
-| Phase | Module | What it does |
-|---|---|---|
-| 1. Acquisition | `dvc/preprocess.py` | Detects binary/gray/color, applies EXIF orientation, flattens alpha, enforces 8–2048 px, checks a lossless PNG round trip (PSNR > 40 dB) |
-| 2. Entropy | `dvc/entropy.py` | 256-bit seed from `secrets` plus a nonce, bound with HKDF-SHA256 to session id, timestamp, image digest and (k, n, mode); SHAKE-256 keystreams; optional logistic-map mixing (r = 3.99) |
-| 3. Encoding | `dvc/encoder.py`, `dvc/gf256.py` | Zero-expansion shares, see below |
-| 4. Dispatch | `dvc/manifest.py`, `dvc/transport.py` | Per-share tags, sealed manifest, one directory per channel, fault injector |
-| 5. Verification | `dvc/verify.py` | Manifest checksum/HMAC, freshness, parameters, per-share tags, quorum rule; codes `MISSING`, `TAMPER`, `STALE`, `PARAM_MISMATCH`; selective retry |
-| 6. Reconstruction | `dvc/reconstruct.py` | XOR / GF(256) combine (bit-exact) or OR stacking with an enhanced viewing copy |
-| 7. Scoring & log | `dvc/metrics.py`, `dvc/session.py` | PSNR, SSIM, Michelson contrast, entropy, correlation, NPCR, UACI; JSONL log; bit-exact replay |
-
-### Share schemes
-
-| Recovery mode | (k, n) | Scheme | Result |
-|---|---|---|---|
-| XOR | k = n | n − 1 random shares + secret XOR all of them | Bit-exact |
-| XOR | k < n | Per-byte polynomial sharing over GF(2⁸) (Shamir), decoded with XOR and table lookups | Bit-exact |
-| OR | any | Floyd–Steinberg halftone, then the Chen–Tsao (k, n) random-grid rule | Visual: the secret appears as a contrast difference |
-
-Plain random-grid XOR is only lossless when k = n. To meet the PDF's XOR-path targets (PSNR > 30 dB,
-SSIM > 0.90) for (2, 3) and (3, 5), XOR mode with k < n uses GF(256) sharing. Its shares are the same size and
-uniformly random, and decoding is still lightweight.
-
-## Results (`reports/summary.md`, 8 images × 5 thresholds × 2 modes)
-
-| Target (PDF section 13) | Result |
-|---|---|
-| PSNR > 30 dB, SSIM > 0.90 (XOR path) | 40/40 sessions, all bit-exact |
-| Share entropy > 7.9 bits (8-bit shares) | 40/40, min 7.997 |
-| Share-to-secret \|corr\| < 0.05 | 80/80 |
-| Cross-session NPCR > 99% (8-bit shares) | 40/40, min 99.56% |
-| Tamper detection (flip, crop, substitute, replay) | 192/192 |
-| Recovery with one bad channel at (2, 3) | 288/288 |
-| Clean abort below quorum | 288/288 |
-| Zero expansion | 80/80 |
-
-OR shares are binary, so their entropy is 1 bit and their ideal cross-session NPCR is 50%. The 8-bit targets
-don't apply to them. Their relative contrast falls as k grows (0.50 at (2,2), 0.33 at (2,3), 0.09 at (3,5)),
-which is a known property of random-grid schemes and is plotted in `reports/threshold_curves.png`.
+The trained model classifies clean shares as `genuine` with very high confidence on the included samples. The
+scorecard reports both GCM and CNN results.
 
 ## Layout
 
 ```
-dvc/            library (one module per pipeline layer)
-app.py          Streamlit dashboard
-bench.py        benchmark -> reports/
-tests/          pytest suite
-samples/        USC-SIPI Mandrill, Peppers, House, Clock, Bridge + synthetic test images
-reports/        latest benchmark output
-runs/           created at runtime (git-ignored): channel folders, sessions.jsonl, logged inputs
+app.py             current seven-stage dashboard
+main.py            alias for app.py
+prism_flow.py      spectral bands, XOR shares, AES-GCM, ShareCNN, training and CLI demo
+flow_session.py    seven-stage session orchestration, faults, retries, logging and replay
+diagram.py         SVG seven-stage diagram with live images and status badges
+dvc/               original variable-threshold visual cryptography library
+tests/             pytest suite for the original library
+bench.py           benchmark for the original library
+samples/           test images
+share_cnn.pt       trained ShareCNN checkpoint
+runs/              created at runtime (git-ignored): session log and replay inputs
 ```
-
-`samples/` contains the USC-SIPI test images Mandrill, Peppers, House, Clock and Bridge
-(https://sipi.usc.edu/database/), plus three synthetic images made for this project.
 
 ## Security notes
 
-- `runs/sessions.jsonl` stores the session seed by default so sessions can be replayed. Seed + logged input =
-  every share. Treat `runs/` like the secret images, or turn off "Store seed" (CLI: `--no-seed`), which logs only
-  a SHA-256 seed commitment.
-- The manifest has a SHA-256 checksum. Set `DVC_MANIFEST_KEY` on sender and receiver to add an HMAC-SHA256
-  signature, so an attacker can't rewrite the manifest and tags together.
-- Channels are simulated with local folders. A live network, video, and multiple secrets per share set are out of
-  scope (PDF section 14).
-- Lena (USC-SIPI 4.2.04) is no longer distributed by USC-SIPI and isn't included. Medical and biometric samples
-  aren't included either. Put any images in `samples/` and `bench.py` will include them.
+- `runs/sessions.jsonl` stores the session seed by default so a session can be replayed. Seed plus input
+  regenerates the shares. Treat `runs/` like the secret image, or turn off **Store seed in log**.
+- The master key is ephemeral and is never logged. The log stores only a seed commitment when seed storage is
+  disabled.
+- AES-256-GCM authenticates the ciphertext and metadata before decryption. The CNN is not an authenticator.
+- Channels are simulated locally. A live network transport, video, and multiple secrets per share set are out of
+  scope.
+- The seven spectral bands are simulated from RGB and are not a substitute for a real multispectral sensor.
+
+## Original threshold dashboard
+
+The `dvc/` package, tests and benchmark implement the earlier variable-threshold dashboard
+(`k` of `n` shares, XOR/GF(256) or OR stacking, SHA-256 tags and manifests). They are kept for reference and for
+the original test suite:
+
+```bash
+python -m pytest -q
+python bench.py
+```
+
+The current `app.py` uses the new prism-inspired flow and does not call the old dashboard code.

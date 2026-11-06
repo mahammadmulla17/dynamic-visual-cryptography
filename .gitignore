@@ -1,13 +1,25 @@
 # Virtual environment
 .venv/
+.venv*/
 venv/
 
 # Runtime data: session seeds, logged secret images, channel folders.
 # Never commit this; anyone with it can regenerate every share.
 runs/
+runs_flow_test/
 
-# CLI artifact output
+# Generated artifacts
 out/
+output/
+data/
+pdf_text.txt
+
+# Model checkpoint (the small ShareCNN checkpoint is tracked below)
+*.pt
+!share_cnn.pt
+
+# Secrets
+.streamlit/secrets.toml
 
 # Python / tooling caches
 __pycache__/
